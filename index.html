@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Fortuna-7 · 双人德州</title>
+<style>
+:root{--bg:#070a11;--panel:#101724;--line:#263248;--text:#e9eef7;--muted:#8e9ab0;--gold:#d6b56a;--red:#c82f3c;--green:#78c69b}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1d2948 0,#080b12 47%,#05070b 100%);color:var(--text);font-family:Inter,system-ui,"Microsoft YaHei",sans-serif}
+.wrap{max-width:940px;margin:auto;padding:34px 18px 60px}h1{margin:0;font-size:25px;font-weight:500;letter-spacing:.18em}.sub{color:var(--muted);margin:8px 0 25px}
+.panel{background:#101724e8;border:1px solid var(--line);border-radius:18px;padding:20px;margin:15px 0;box-shadow:0 20px 50px #0005}.row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+button,input{font:inherit}button{background:#182239;color:var(--text);border:1px solid #34445f;border-radius:10px;padding:10px 15px;cursor:pointer}button:hover{border-color:var(--gold)}button.primary{background:var(--gold);color:#17120a;border-color:var(--gold);font-weight:700}button:disabled{opacity:.4;cursor:not-allowed}
+input{background:#0a0f18;color:var(--text);border:1px solid #34445f;border-radius:10px;padding:10px 12px;text-transform:uppercase}
+.cards{display:flex;gap:11px;flex-wrap:wrap;min-height:112px;margin-top:12px}.card{width:75px;height:105px;background:#f5f2e9;color:#111;border-radius:10px;padding:9px;font:700 22px Georgia,serif;box-shadow:0 6px 15px #0008;position:relative}.card.red{color:#b8242d}.suit{position:absolute;right:9px;bottom:7px;font-size:28px}.empty{color:var(--muted);padding-top:30px}
+.label{font-size:11px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase}.big{font-size:19px;margin-top:5px}.gold{color:var(--gold)}.green{color:var(--green)}.controls{display:flex;gap:8px;flex-wrap:wrap}.hidden{display:none}.hint{line-height:1.65;color:#cbd3e1}.tiny{font-size:13px;color:var(--muted);line-height:1.55}.status{display:flex;gap:18px;flex-wrap:wrap}.pill{padding:6px 9px;border-radius:999px;background:#0b111b;border:1px solid #28364b;font-size:12px}
+@media(max-width:600px){.card{width:65px;height:92px}.wrap{padding-top:22px}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>FORTUNA-7</h1><div class="sub">Heads-Up Hold'em · 私密牌桌</div>
+
+<div id="lobby" class="panel">
+  <div class="row">
+    <div><div class="label">建立私人牌桌</div><div class="big">西奥多创建房间，安布罗斯通过链接加入。</div></div>
+    <button class="primary" onclick="createRoom()">创建房间</button>
+  </div>
+  <hr style="border:0;border-top:1px solid #263248;margin:20px 0">
+  <div class="label">已有房间码</div>
+  <div class="controls" style="margin-top:8px"><input id="roomInput" maxlength="6" placeholder="ABC123"><button onclick="joinTyped()">作为安布罗斯加入</button></div>
+  <div id="lobbyMsg" class="tiny" style="margin-top:10px"></div>
+</div>
+
+<div id="table" class="hidden">
+  <div class="panel row">
+    <div><div class="label">房间</div><div class="big gold" id="roomCode"></div></div>
+    <div id="hostShare" class="controls hidden"><button onclick="copyInvite()">复制安布罗斯邀请链接</button></div>
+    <div class="status"><span class="pill" id="meRole"></span><span class="pill" id="connection"></span></div>
+  </div>
+
+  <div class="panel">
+    <div class="row"><div><div class="label">你的底牌</div><div class="big" id="yourName"></div></div><div id="dealerBadge" class="pill"></div></div>
+    <div id="hand" class="cards"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row"><div><div class="label">公共牌</div><div class="big" id="streetName">等待发牌</div></div></div>
+    <div id="board" class="cards"></div>
+  </div>
+
+  <div id="hostControls" class="panel hidden">
+    <div class="label">荷官控制</div>
+    <div class="controls" style="margin-top:10px"><button class="primary" onclick="newHand()">发新的一手</button><button id="nextBtn" onclick="nextStreet()" disabled>发翻牌</button></div>
+    <div class="tiny" style="margin-top:12px">只有西奥多端能看到这些按钮。安布罗斯端不会收到你的底牌，也不会收到整副牌堆。</div>
+  </div>
+
+  <div class="panel hint" id="hint">等待牌局开始。</div>
+</div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket=io(); let role=null,roomId=null,state=null,hand=[];
+const $=id=>document.getElementById(id);
+function card(c){const red=c.s==="♥"||c.s==="♦";return `<div class="card ${red?"red":""}">${c.r}<span class="suit">${c.s}</span></div>`}
+function drawCards(id,cards,empty){$(id).innerHTML=cards.length?cards.map(card).join(""):`<div class="empty">${empty}</div>`}
+function enter(){
+  $("lobby").classList.add("hidden");$("table").classList.remove("hidden");$("roomCode").textContent=roomId;
+  $("meRole").textContent=role==="theodore"?"你的席位：西奥多":"你的席位：安布罗斯";
+  $("yourName").textContent=role==="theodore"?"西奥多 · 你的私牌":"安布罗斯 · 你的私牌";
+  if(role==="theodore"){$("hostControls").classList.remove("hidden");$("hostShare").classList.remove("hidden")}
+  render();
+}
+function createRoom(){socket.emit("createRoom",r=>{if(!r.ok)return;role=r.role;roomId=r.roomId;history.replaceState(null,"",`/?room=${roomId}&role=theodore`);enter()})}
+function joinTyped(){joinRoom($("roomInput").value)}
+function joinRoom(id){socket.emit("joinRoom",{roomId:id},r=>{if(!r.ok){$("lobbyMsg").textContent=r.error;return}role=r.role;roomId=r.roomId;history.replaceState(null,"",`/?room=${roomId}&role=ambrose`);enter()})}
+function copyInvite(){const u=`${location.origin}/?room=${roomId}&role=ambrose`;navigator.clipboard.writeText(u);$("hint").textContent="邀请链接已复制。把它发给安布罗斯即可。"}
+function newHand(){socket.emit("newHand",r=>{if(r&&!r.ok)$("hint").textContent=r.error||"无法发牌"})}
+function nextStreet(){socket.emit("nextStreet",r=>{if(r&&!r.ok)$("hint").textContent=r.error||"无法继续发牌"})}
+function render(){
+  if(!state)return;
+  drawCards("hand",hand,"尚未发底牌");drawCards("board",state.board,"公共牌尚未翻开");
+  const names={waiting:"等待开始",preflop:"Pre-flop · 翻牌前",flop:"Flop · 翻牌",turn:"Turn · 转牌",river:"River · 河牌"};
+  $("streetName").textContent=names[state.street];
+  const dealerName=state.dealer==="theodore"?"西奥多":"安布罗斯";
+  $("dealerBadge").textContent=`本手庄家：${dealerName}`;
+  $("connection").textContent=state.connected.ambrose?"双方已连接":"等待安布罗斯";
+  if(role==="theodore"){
+    const btn=$("nextBtn");
+    btn.disabled=state.street==="waiting"||state.street==="river";
+    btn.textContent=state.street==="preflop"?"发翻牌":state.street==="flop"?"发转牌":state.street==="turn"?"发河牌":"已发完";
+  }
+  let h="";
+  if(state.street==="waiting") h=role==="theodore"?(state.connected.ambrose?"安布罗斯已进入。现在可以点击“发新的一手”。":"把邀请链接发给安布罗斯，等他加入。"):"等待西奥多发牌。";
+  else if(state.street==="preflop") h=`翻牌前。本手庄家为${dealerName}。双人德州中，庄家下小盲并先行动。`;
+  else if(state.street==="flop") h="翻牌已开。现在由非庄家一方先行动；完成这一轮下注后，由西奥多控制发转牌。";
+  else if(state.street==="turn") h="转牌已开。完成这一轮下注后，由西奥多控制发河牌。";
+  else h="河牌已开。进行最后一轮下注；若无人弃牌，则摊牌决定胜负。";
+  $("hint").textContent=h;
+}
+socket.on("publicState",s=>{state=s;render()});
+socket.on("privateState",p=>{hand=p.hand||[];render()});
+socket.on("roomClosed",()=>{alert("西奥多已离开，房间关闭。");location.href="/"});
+
+const q=new URLSearchParams(location.search);
+if(q.get("room")&&q.get("role")==="ambrose"){ $("roomInput").value=q.get("room"); joinRoom(q.get("room")); }
+</script>
+</body></html>
